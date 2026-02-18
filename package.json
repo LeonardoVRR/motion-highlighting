@@ -17,12 +17,25 @@
   ],
   "main": "./extension.js",
   "contributes": {
-    "commands": [
-      {
-        "command": "motion-highlighting.helloWorld",
-        "title": "Motion Highlighting"
+    "configuration": {
+      "title": "Motion Colorizer",
+      "properties": {
+        "motionColorizer.saturation": {
+          "type": "number",
+          "default": 70,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Saturation of generated colors"
+        },
+        "motionColorizer.lightness": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Lightness of generated colors"
+        }
       }
-    ]
+    }
   },
   "scripts": {
     "lint": "eslint .",

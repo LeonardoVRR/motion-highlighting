@@ -15,13 +15,19 @@ function activate(context) {
 	const decorators = {}
 
 	function getColorFromTag(tag) {
+
+		const config = vscode.workspace.getConfiguration('motionColorizer')
+
+		const saturation = config.get('saturation')
+		const lightness = config.get('lightness')
+
 		let hash = 0
 
 		for (let i = 0; i < tag.length; i++) {
 			hash = tag.charCodeAt(i) + ((hash << 5) - hash)
 		}
 
-		const color = `hsl(${Math.abs(hash % 360)}, 70%, 60%)`
+		const color = `hsl(${Math.abs(hash % 360)}, ${saturation}%, ${lightness}%)`
 
 		return color
 	}
@@ -77,6 +83,24 @@ function activate(context) {
 
 	vscode.window.onDidChangeActiveTextEditor(editor => {
 		updateDecorations(editor)
+	})
+
+	vscode.workspace.onDidChangeConfiguration((event) => {
+
+		if (!event.affectsConfiguration("motionColorizer")) { return }
+
+		const decoratorsKeys = Object.keys(decorators)
+
+		if (decoratorsKeys.length === 0) { return }
+
+		for (const tag in decorators) {
+			decorators[tag].dispose()
+			delete decorators[tag]
+		}
+
+		for (const editor of vscode.window.visibleTextEditors) {
+			updateDecorations(editor)
+		}
 	})
 
 	vscode.workspace.onDidChangeTextDocument(event => {
