@@ -1,6 +1,6 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
-const vscode = require('vscode');
+const vscode = require("vscode");
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -9,162 +9,347 @@ const vscode = require('vscode');
  * @param {vscode.ExtensionContext} context
  */
 
-const decorators = {}
-let tagColors = {}
+/**
+ * @type {WeakMap<vscode.TextEditor, {
+ *   startLine: number,
+ *   lastLine: number,
+ *   visibleLines: number
+ * }>}
+ */
+
+/**
+ * @type {WeakMap<vscode.TextDocument, Map<number, {
+ *   text: string,
+ *   ranges: vscode.Range[]
+ * }>>}
+ */
+
+let decorators = {};
+let tagColors = {};
+let viewPortHeight = new WeakMap();
+let lineCache = new WeakMap();
+
+const timeoutEditorMap = new WeakMap();
+const scrollTimeoutMap = new WeakMap();
 
 function activate(context) {
+  let changeEditorTimeout;
 
-	let timeout
+  function updateViewport(editor) {
+    const visibleRanges = editor.visibleRanges;
 
-	const prefix = "motion"
-	const prefixLength = prefix.length
-	const dotLength = 1
+    if (!visibleRanges.length) {
+      return;
+    }
 
-	function getColorFromTag(tag) {
+    const startLine = visibleRanges[0].start.line;
+    const lastLine = visibleRanges[visibleRanges.length - 1].end.line;
+    const visibleLines = lastLine - startLine + 1;
 
-		const config = vscode.workspace.getConfiguration('motionColorizer')
+    viewPortHeight.set(editor, {
+      startLine,
+      lastLine,
+      visibleLines,
+    });
+  }
 
-		const saturation = config.get('saturation')
-		const lightness = config.get('lightness')
+  function getColorFromTag(tag) {
+    const config = vscode.workspace.getConfiguration("motionHighlighting");
 
-		let hash = 0
+    const saturation = config.get("saturation");
+    const lightness = config.get("lightness");
 
-		for (let i = 0; i < tag.length; i++) {
-			hash = tag.charCodeAt(i) + ((hash << 5) - hash)
-		}
+    let hash = 0;
 
-		const color = `hsl(${Math.abs(hash % 360)}, ${saturation}%, ${lightness}%)`
+    for (let i = 0; i < tag.length; i++) {
+      hash = tag.charCodeAt(i) + ((hash << 5) - hash);
+    }
 
-		return color
-	}
+    const color = `hsl(${Math.abs(hash % 360)}, ${saturation}%, ${lightness}%)`;
 
-	function updateDecorations(editor) {
+    return color;
+  }
 
-		if (!editor) { return }
+  function computeRanges(currentText, lineNumber, highlightMode = "full") {
+    const ranges = {};
+    const regex = /(?<=<\/?)(motion\.\w+)(?=[\s>])/g;
 
-		const config = vscode.workspace.getConfiguration('motionColorizer')
-		const highlightMode = config.get("highlightMode")
+    const prefix = "motion";
+    const prefixLength = prefix.length;
+    const dotLength = 1;
 
-		const document = editor.document
-		const text = document.getText()
-		const regex = /(?<=<\/?)(motion\.\w+)(?=[\s>])/g
+    let startPos;
+    let endPos;
 
-		if (!text.includes("motion.")) { return }
+    let match;
 
-		const ranges = {};
+    regex.lastIndex = 0;
 
-		let match;
+    while ((match = regex.exec(currentText)) !== null) {
+      const baseIndex = match.index;
+      const fullLength = match[0].length;
 
-		for (const tag in decorators) {
-			editor.setDecorations(decorators[tag], [])
-		}
+      if (highlightMode === "prefix") {
+        startPos = new vscode.Position(lineNumber, baseIndex);
+        endPos = new vscode.Position(lineNumber, baseIndex + prefixLength);
+      } else if (highlightMode === "tagOnly") {
+        startPos = new vscode.Position(
+          lineNumber,
+          baseIndex + prefixLength + dotLength,
+        );
+        endPos = new vscode.Position(lineNumber, baseIndex + fullLength);
+      } else {
+        startPos = new vscode.Position(lineNumber, baseIndex);
+        endPos = new vscode.Position(lineNumber, baseIndex + fullLength);
+      }
 
-		let startPos
-		let endPos
+      const range = new vscode.Range(startPos, endPos);
+      const tag = match[1];
 
-		while ((match = regex.exec(text)) !== null) {
+      if (!ranges[tag]) {
+        ranges[tag] = [];
+      }
 
-			const baseIndex = match.index
-			const fullLength = match[0].length
+      ranges[tag].push(range);
+    }
 
-			if (highlightMode === "prefix") {
-				startPos = document.positionAt(baseIndex)
-				endPos = document.positionAt(baseIndex + prefixLength)
-			}
+    return ranges;
+  }
 
-			else if (highlightMode === "tagOnly") {
-				startPos = document.positionAt(baseIndex + prefixLength + dotLength)
-				endPos = document.positionAt(baseIndex + fullLength)
-			}
+  function updateDecorations(editor) {
+    if (!editor) {
+      return;
+    }
 
-			else {
-				startPos = document.positionAt(baseIndex)
-				endPos = document.positionAt(baseIndex + fullLength)
-			}
+    const document = editor.document;
 
-			const range = new vscode.Range(startPos, endPos)
-			const tag = match[1]
+    let lineCacheMap = lineCache.get(document);
 
-			if (!tagColors[tag]) {
-				tagColors[tag] = getColorFromTag(tag)
-			}
+    if (!lineCacheMap) {
+      lineCacheMap = new Map();
+      lineCache.set(document, lineCacheMap);
+    }
 
-			if (!decorators[tag]) {
+    const config = vscode.workspace.getConfiguration("motionHighlighting");
+    const highlightMode = config.get("highlightMode");
 
-				decorators[tag] = vscode.window.createTextEditorDecorationType({
-					color: tagColors[tag],
-				})
-			}
+    let ranges = {};
 
-			if (!ranges[tag]) {
-				ranges[tag] = []
-			}
+    const viewport = viewPortHeight.get(editor);
+    if (!viewport) return;
+    if (document.lineCount === 0) return;
 
-			ranges[tag].push(range)
-		}
+    const maxLines = editor.document.lineCount - 1;
 
-		for (const tag in ranges) {
-			editor.setDecorations(decorators[tag], ranges[tag])
-		}
-	}
+    let startLine = Math.max(0, viewport.startLine - 5);
+    let lastLine = Math.min(maxLines, viewport.lastLine + 5);
 
-	if (vscode.window.activeTextEditor) {
-		updateDecorations(vscode.window.activeTextEditor)
-	}
+    for (let line = startLine; line <= lastLine; line++) {
+      const lineText = document.lineAt(line);
+      const currentText = lineText.text;
 
-	vscode.window.onDidChangeActiveTextEditor(editor => {
-		updateDecorations(editor)
-	})
+      const cachedLine = lineCacheMap.get(line);
 
-	vscode.workspace.onDidChangeConfiguration((event) => {
+      let lineRanges;
 
-		if (!event.affectsConfiguration("motionColorizer")) { return }
+      if (cachedLine && cachedLine.text === currentText) {
+        lineRanges = cachedLine.ranges;
+      } else {
+        lineRanges = computeRanges(currentText, line, highlightMode);
 
-		for (const tag in decorators) {
-			decorators[tag].dispose()
-			delete decorators[tag]
-		}
+        lineCacheMap.set(line, {
+          text: currentText,
+          ranges: lineRanges,
+        });
+      }
 
-		if (event.affectsConfiguration("motionColorizer.saturation") ||
-			event.affectsConfiguration("motionColorizer.lightness")) {
-			console.log("Cor alterada")
-			tagColors = {}
-		}
+      for (const tag in lineRanges) {
+        if (!ranges[tag]) {
+          ranges[tag] = [];
+        }
 
-		for (const editor of vscode.window.visibleTextEditors) {
-			updateDecorations(editor)
-		}
-	})
+        ranges[tag].push(...lineRanges[tag]);
+      }
+    }
 
-	vscode.workspace.onDidChangeTextDocument(event => {
-		const editor = vscode.window.activeTextEditor
+    for (const tag in decorators) {
+      if (!ranges[tag]) {
+        editor.setDecorations(decorators[tag], []);
+      }
+    }
 
-		if (editor && event.document === editor.document) {
+    for (const tag in ranges) {
+      if (!tagColors[tag]) {
+        tagColors[tag] = getColorFromTag(tag);
+      }
 
-			if (timeout) {
-				clearTimeout(timeout)
-			}
+      if (!decorators[tag]) {
+        decorators[tag] = vscode.window.createTextEditorDecorationType({
+          color: tagColors[tag],
+        });
+      }
 
-			timeout = setTimeout(() => {
-				updateDecorations(editor)
-			}, 200)
-		}
-	})
+      editor.setDecorations(decorators[tag], ranges[tag] || []);
+    }
+  }
+
+  if (vscode.window.activeTextEditor) {
+    const editor = vscode.window.activeTextEditor;
+    const visibleRanges = editor.visibleRanges;
+
+    const startLine = visibleRanges[0].start.line;
+    const lastLine = visibleRanges[visibleRanges.length - 1].end.line;
+    const visibleLines = lastLine - startLine + 1;
+
+    const maxLine = editor.document.lineCount - 1;
+
+    viewPortHeight.set(editor, {
+      startLine,
+      lastLine,
+      visibleLines,
+    });
+
+    updateDecorations(editor);
+  }
+
+  vscode.window.onDidChangeActiveTextEditor((editor) => {
+    if (!editor) {
+      return;
+    }
+
+    if (changeEditorTimeout) {
+      clearTimeout(changeEditorTimeout);
+    }
+
+    changeEditorTimeout = setTimeout(() => {
+      const visibleRanges = editor.visibleRanges;
+
+      const startLine = visibleRanges[0].start.line;
+      const lastLine = visibleRanges[visibleRanges.length - 1].end.line;
+      const visibleLines = lastLine - startLine + 1;
+
+      const maxLine = editor.document.lineCount - 1;
+
+      viewPortHeight.set(editor, {
+        startLine,
+        lastLine,
+        visibleLines,
+      });
+
+      updateDecorations(editor);
+    }, 50);
+  });
+
+  vscode.workspace.onDidChangeConfiguration((event) => {
+    if (!event.affectsConfiguration("motionHighlighting")) {
+      return;
+    }
+
+    for (const tag in decorators) {
+      decorators[tag].dispose();
+    }
+
+    decorators = {};
+
+    lineCache = new WeakMap();
+
+    if (
+      event.affectsConfiguration("motionHighlighting.saturation") ||
+      event.affectsConfiguration("motionHighlighting.lightness")
+    ) {
+      tagColors = {};
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      updateViewport(editor);
+      updateDecorations(editor);
+    }
+  });
+
+  vscode.window.onDidChangeTextEditorVisibleRanges((event) => {
+    const editor = event.textEditor;
+
+    if (!editor) {
+      return;
+    }
+
+    const existingTimeout = scrollTimeoutMap.get(editor);
+
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    const scrollTimeout = setTimeout(() => {
+      updateViewport(editor);
+      updateDecorations(editor);
+    }, 200);
+
+    scrollTimeoutMap.set(editor, scrollTimeout);
+  });
+
+  vscode.workspace.onDidChangeTextDocument((event) => {
+    const existingTimeout = timeoutEditorMap.get(event.document);
+
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    const timeout = setTimeout(() => {
+      const activeEditor = vscode.window.activeTextEditor;
+
+      if (!activeEditor || activeEditor.document !== event.document) {
+        return;
+      }
+
+      const lineCacheMap = lineCache.get(event.document);
+
+      if (lineCacheMap) {
+        for (const change of event.contentChanges) {
+          if (change.text.includes("\n")) {
+            lineCache.delete(event.document);
+            break;
+          }
+
+          const startLine = change.range.start.line;
+          const endLine = change.range.end.line;
+
+          for (let line = startLine; line <= endLine; line++) {
+            lineCacheMap.delete(line);
+          }
+        }
+      }
+
+      updateDecorations(activeEditor);
+    }, 200);
+
+    timeoutEditorMap.set(event.document, timeout);
+  });
+
+  vscode.workspace.onDidCloseTextDocument((document) => {
+    const existingTimeout = timeoutEditorMap.get(document);
+
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    viewPortHeight.delete(document);
+    lineCache.delete(document);
+    timeoutEditorMap.delete(document);
+    scrollTimeoutMap.delete(document);
+  });
 }
 
 // This method is called when your extension is deactivated
 function deactivate() {
-	for (const tag in decorators) {
-		decorators[tag].dispose()
-		delete decorators[tag]
-	}
+  tagColors = {};
 
-	for (const tag in tagColors) {
-		delete tagColors[tag]
-	}
+  for (const tag in decorators) {
+    decorators[tag].dispose();
+    delete decorators[tag];
+  }
 }
 
 module.exports = {
-	activate,
-	deactivate
-}
+  activate,
+  deactivate,
+};

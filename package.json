@@ -18,23 +18,23 @@
   "main": "./extension.js",
   "contributes": {
     "configuration": {
-      "title": "Motion Colorizer",
+      "title": "Motion Highlighting",
       "properties": {
-        "motionColorizer.saturation": {
+        "motionHighlighting.saturation": {
           "type": "number",
           "default": 70,
           "minimum": 0,
           "maximum": 100,
           "description": "Saturation of generated colors"
         },
-        "motionColorizer.lightness": {
+        "motionHighlighting.lightness": {
           "type": "number",
           "default": 60,
           "minimum": 0,
           "maximum": 100,
           "description": "Lightness of generated colors"
         },
-        "motionColorizer.highlightMode": {
+        "motionHighlighting.highlightMode": {
           "type": "string",
           "enum": [
             "full",
