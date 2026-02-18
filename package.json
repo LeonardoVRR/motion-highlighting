@@ -33,6 +33,16 @@
           "minimum": 0,
           "maximum": 100,
           "description": "Lightness of generated colors"
+        },
+        "motionColorizer.highlightMode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "prefix",
+            "tagOnly"
+          ],
+          "default": "full",
+          "description": "Controls which part of motion components should be highlighted."
         }
       }
     }

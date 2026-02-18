@@ -8,11 +8,17 @@ const vscode = require('vscode');
 /**
  * @param {vscode.ExtensionContext} context
  */
+
+const decorators = {}
+let tagColors = {}
+
 function activate(context) {
 
 	let timeout
 
-	const decorators = {}
+	const prefix = "motion"
+	const prefixLength = prefix.length
+	const dotLength = 1
 
 	function getColorFromTag(tag) {
 
@@ -36,11 +42,14 @@ function activate(context) {
 
 		if (!editor) { return }
 
+		const config = vscode.workspace.getConfiguration('motionColorizer')
+		const highlightMode = config.get("highlightMode")
+
 		const document = editor.document
 		const text = document.getText()
-		const regex = /motion\.(\w+)/g
+		const regex = /(?<=<\/?)(motion\.\w+)(?=[\s>])/g
 
-		if (!(text.includes("motion.")) || text.length === 0) { return }
+		if (!text.includes("motion.")) { return }
 
 		const ranges = {};
 
@@ -50,18 +59,40 @@ function activate(context) {
 			editor.setDecorations(decorators[tag], [])
 		}
 
+		let startPos
+		let endPos
+
 		while ((match = regex.exec(text)) !== null) {
-			const startPos = document.positionAt(match.index)
-			const endPos = document.positionAt(match.index + match[0].length)
+
+			const baseIndex = match.index
+			const fullLength = match[0].length
+
+			if (highlightMode === "prefix") {
+				startPos = document.positionAt(baseIndex)
+				endPos = document.positionAt(baseIndex + prefixLength)
+			}
+
+			else if (highlightMode === "tagOnly") {
+				startPos = document.positionAt(baseIndex + prefixLength + dotLength)
+				endPos = document.positionAt(baseIndex + fullLength)
+			}
+
+			else {
+				startPos = document.positionAt(baseIndex)
+				endPos = document.positionAt(baseIndex + fullLength)
+			}
 
 			const range = new vscode.Range(startPos, endPos)
-
 			const tag = match[1]
+
+			if (!tagColors[tag]) {
+				tagColors[tag] = getColorFromTag(tag)
+			}
 
 			if (!decorators[tag]) {
 
 				decorators[tag] = vscode.window.createTextEditorDecorationType({
-					color: getColorFromTag(tag),
+					color: tagColors[tag],
 				})
 			}
 
@@ -89,13 +120,15 @@ function activate(context) {
 
 		if (!event.affectsConfiguration("motionColorizer")) { return }
 
-		const decoratorsKeys = Object.keys(decorators)
-
-		if (decoratorsKeys.length === 0) { return }
-
 		for (const tag in decorators) {
 			decorators[tag].dispose()
 			delete decorators[tag]
+		}
+
+		if (event.affectsConfiguration("motionColorizer.saturation") ||
+			event.affectsConfiguration("motionColorizer.lightness")) {
+			console.log("Cor alterada")
+			tagColors = {}
 		}
 
 		for (const editor of vscode.window.visibleTextEditors) {
@@ -107,7 +140,6 @@ function activate(context) {
 		const editor = vscode.window.activeTextEditor
 
 		if (editor && event.document === editor.document) {
-			updateDecorations(editor)
 
 			if (timeout) {
 				clearTimeout(timeout)
@@ -121,7 +153,16 @@ function activate(context) {
 }
 
 // This method is called when your extension is deactivated
-function deactivate() { }
+function deactivate() {
+	for (const tag in decorators) {
+		decorators[tag].dispose()
+		delete decorators[tag]
+	}
+
+	for (const tag in tagColors) {
+		delete tagColors[tag]
+	}
+}
 
 module.exports = {
 	activate,
